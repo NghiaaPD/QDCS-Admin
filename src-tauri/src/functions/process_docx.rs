@@ -167,7 +167,7 @@ pub fn read_docx_content_from_bytes(
                                     })
                                 });
 
-                        if let Some(text) = answer_texts.get(&correct_answer.trim().to_string()) {
+                        if let Some(text) = answer_texts.get(correct_answer.trim()) {
                             question.correct_answer_text = text.clone();
                         }
                     }
@@ -175,13 +175,13 @@ pub fn read_docx_content_from_bytes(
             }
 
             if !question.text.is_empty() {
-                let question_embeddings = MODEL.embed(vec![question.text.clone()], None)?;
+                let question_embeddings = MODEL.embed(vec![&question.text], None)?;
                 question.question_embedding = question_embeddings[0].clone();
             }
 
             if !question.correct_answer_text.is_empty() {
                 let answer_embeddings =
-                    MODEL.embed(vec![question.correct_answer_text.clone()], None)?;
+                    MODEL.embed(vec![&question.correct_answer_text], None)?;
                 question.answer_embedding = answer_embeddings[0].clone();
             }
 
