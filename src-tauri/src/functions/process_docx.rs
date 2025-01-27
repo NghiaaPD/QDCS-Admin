@@ -2,6 +2,7 @@ use docx_rust::DocxFile;
 use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
 use docx_rust::document::{BodyContent, ParagraphContent, RunContent, TableRowContent, TableCellContent};
 use std::io::Cursor;
+use once_cell::sync::Lazy;
 
 #[derive(Debug)]
 pub struct Question {
@@ -22,11 +23,12 @@ impl std::fmt::Display for Question {
     }
 }
 
-pub fn read_docx_content_from_bytes(bytes: &[u8]) -> Result<Vec<Question>, Box<dyn std::error::Error>> {
-    let model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-    )?;
+static MODEL: Lazy<TextEmbedding> = Lazy::new(|| {
+    TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
+        .expect("Không thể khởi tạo model embedding")
+});
 
+pub fn read_docx_content_from_bytes(bytes: &[u8]) -> Result<Vec<Question>, Box<dyn std::error::Error>> {
     let cursor = Cursor::new(bytes);
     
     let docx = DocxFile::from_reader(cursor)?;
@@ -144,12 +146,12 @@ pub fn read_docx_content_from_bytes(bytes: &[u8]) -> Result<Vec<Question>, Box<d
             }
 
             if !question.text.is_empty() {
-                let question_embeddings = model.embed(vec![question.text.clone()], None)?;
+                let question_embeddings = MODEL.embed(vec![question.text.clone()], None)?;
                 question.question_embedding = question_embeddings[0].clone();
             }
 
             if !question.correct_answer_text.is_empty() {
-                let answer_embeddings = model.embed(vec![question.correct_answer_text.clone()], None)?;
+                let answer_embeddings = MODEL.embed(vec![question.correct_answer_text.clone()], None)?;
                 question.answer_embedding = answer_embeddings[0].clone();
             }
 
