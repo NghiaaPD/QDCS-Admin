@@ -1,8 +1,10 @@
+use anyhow::{anyhow, Result};
 use docx_rust::document::{
     BodyContent, ParagraphContent, RunContent, Table, TableCell, TableCellContent, TableRowContent,
 };
 use docx_rust::DocxFile;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{io::Cursor, sync::LazyLock};
 
 #[derive(Debug)]
@@ -50,7 +52,7 @@ fn get_table_cell_content(cell_data: &TableCell<'_>) -> String {
         .to_string()
 }
 
-fn parse_table(table: &Table<'_>) -> Result<Question, Box<dyn std::error::Error>> {
+fn parse_table(table: &Table<'_>) -> Result<Question> {
     let mut question = Question {
         text: String::new(),
         correct_answer_text: String::new(),
@@ -69,7 +71,7 @@ fn parse_table(table: &Table<'_>) -> Result<Question, Box<dyn std::error::Error>
             TableRowContent::TableCell(cell_data) => Some(get_table_cell_content(cell_data)),
             _ => None,
         })
-        .ok_or("File sai format: Thiếu nội dung câu hỏi")?;
+        .ok_or(anyhow!("File sai format: Thiếu nội dung câu hỏi"))?;
 
     for row in table.rows.iter() {
         let first_cell_text = match &row.cells.first() {
@@ -122,22 +124,23 @@ fn parse_table(table: &Table<'_>) -> Result<Question, Box<dyn std::error::Error>
     Ok(question)
 }
 
-pub fn read_docx_content_from_bytes(
-    bytes: &[u8],
-) -> Result<Vec<Question>, Box<dyn std::error::Error>> {
+pub fn read_docx_content_from_bytes(bytes: &[u8]) -> Result<Vec<Question>> {
     let cursor = Cursor::new(bytes);
 
     let docx = DocxFile::from_reader(cursor)?;
     let docx = docx.parse()?;
-    let mut questions = Vec::new();
 
-    for element in &docx.document.body.content {
-        let BodyContent::Table(table) = element else {
-            continue;
-        };
-
-        questions.push(parse_table(table)?);
-    }
+    let questions = docx
+        .document
+        .body
+        .content
+        .par_iter()
+        .filter_map(|element| match element {
+            BodyContent::Table(table) => Some(table),
+            _ => None,
+        })
+        .map(|table| parse_table(table))
+        .collect::<Result<Vec<_>>>()?;
 
     println!("\n=== All Questions ===");
     for (i, q) in questions.iter().enumerate() {
