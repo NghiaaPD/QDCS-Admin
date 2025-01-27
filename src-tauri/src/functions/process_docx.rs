@@ -105,12 +105,18 @@ fn parse_table(table: &Table<'_>) -> Result<Question, Box<dyn std::error::Error>
 
     if !question.text.is_empty() {
         let question_embeddings = MODEL.embed(vec![&question.text], None)?;
-        question.question_embedding = question_embeddings[0].clone();
+        question.question_embedding = question_embeddings
+            .into_iter()
+            .next()
+            .expect("Failed to calculate question embedding");
     }
 
     if !question.correct_answer_text.is_empty() {
         let answer_embeddings = MODEL.embed(vec![&question.correct_answer_text], None)?;
-        question.answer_embedding = answer_embeddings[0].clone();
+        question.answer_embedding = answer_embeddings
+            .into_iter()
+            .next()
+            .expect("Failed to calculate answer embedding");
     }
 
     Ok(question)
