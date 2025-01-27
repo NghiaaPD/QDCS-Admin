@@ -1,7 +1,0 @@
-transformers
-torch
-torchvision
-torchaudio
-datasets
-sentencepiece
-sentence_transformers 
