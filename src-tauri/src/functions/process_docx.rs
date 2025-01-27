@@ -61,15 +61,15 @@ fn parse_table(table: &Table<'_>) -> Result<Question, Box<dyn std::error::Error>
     let mut answer_texts: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
-    if let Some(first_row) = table.rows.first() {
-        if let Some(TableRowContent::TableCell(cell_data)) = first_row.cells.get(1) {
-            question.text = get_table_cell_content(cell_data);
-        }
-    }
-
-    if question.text.is_empty() {
-        return Err("File sai format: Thiếu nội dung câu hỏi".into());
-    }
+    question.text = table
+        .rows
+        .first()
+        .and_then(|first_row| first_row.cells.get(1))
+        .and_then(|cell| match cell {
+            TableRowContent::TableCell(cell_data) => Some(get_table_cell_content(cell_data)),
+            _ => None,
+        })
+        .ok_or("File sai format: Thiếu nội dung câu hỏi")?;
 
     for row in table.rows.iter() {
         let first_cell_text = match &row.cells.first() {
