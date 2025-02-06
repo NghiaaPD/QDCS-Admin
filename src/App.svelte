@@ -113,6 +113,21 @@
   }
 </script>
 
+<div class="area">
+  <ul class="circles">
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+    <li></li>
+  </ul>
+</div>
+
 {#if notification}
   <div class="fixed top-4 right-4 z-50 animate-fade-in">
     <div
@@ -145,7 +160,7 @@
   </div>
 {/if}
 
-<div class="min-h-screen bg-[#242424] flex items-center justify-center">
+<div class="min-h-screen flex items-center justify-center">
   <div class="bg-white rounded-lg shadow-xl p-10">
     <div
       bind:this={dropZone}

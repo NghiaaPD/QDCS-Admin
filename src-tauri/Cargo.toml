@@ -22,6 +22,8 @@ docx-rust = "0.1.9"
 fastembed = "4.4.0"
 duckdb = { version = "1.1.1", features = ["bundled"] }
 once_cell = "1.20.2"
+rayon = "1.7.0"
+anyhow = "1.0.95"
 
 
 [features]

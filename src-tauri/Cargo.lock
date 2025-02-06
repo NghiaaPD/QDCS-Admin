@@ -97,10 +97,12 @@ checksum = "34ac096ce696dc2fcabef30516bb13c0a68a11d30131d3df6f04711467681b04"
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "docx-rust",
  "duckdb",
  "fastembed",
  "once_cell",
+ "rayon",
  "serde",
  "serde_json",
  "tauri",

@@ -38,7 +38,11 @@
         "providerShortName": null,
         "signingIdentity": null
       },
-      "resources": [],
+      "resources": [
+        "./msvcp140.dll",
+        "./vcruntime140.dll",
+        "./vcruntime140_1.dll"
+      ],
       "shortDescription": "",
       "targets": "all",
       "windows": {
