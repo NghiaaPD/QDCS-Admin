@@ -1,8 +1,6 @@
 <script>
   import { invoke } from "@tauri-apps/api/tauri";
   import { writeTextFile, readTextFile } from "@tauri-apps/api/fs";
-  import { appDir } from "@tauri-apps/api/path";
-  import { onMount } from "svelte";
 
   let fileInput;
   let files = [];
@@ -12,7 +10,6 @@
   const MAX_FILES = 5;
   let activeTab = "database";
   let similarityThreshold = 50;
-  let isDragging = false;
 
   function showNotification(message, type = "error") {
     notification = { message, type };
@@ -33,50 +30,22 @@
     processFiles(selectedFiles);
   }
 
-  // Thêm event listener cho toàn bộ document
-  onMount(() => {
-    document.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-
-    document.addEventListener("drop", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-  });
-
   function handleDrop(event) {
     event.preventDefault();
-    event.stopPropagation();
-    isDragging = false;
-
-    // Lấy files từ dataTransfer
-    const droppedFiles = event.dataTransfer.files;
-    if (!droppedFiles?.length) return;
-
-    const files = Array.from(droppedFiles);
-
-    // Kiểm tra file docx
-    const docxFiles = files.filter((file) => file.name.endsWith(".docx"));
-    if (docxFiles.length !== files.length) {
-      showNotification("Chỉ chấp nhận file .docx");
-      return;
-    }
-
-    processFiles(files.map((file) => ({ name: file.name, file })));
+    const droppedFiles = Array.from(event.dataTransfer.files).map((file) => ({
+      name: file.name,
+      file: file,
+    }));
+    processFiles(droppedFiles);
   }
 
   function handleDragOver(event) {
     event.preventDefault();
-    event.stopPropagation();
-    isDragging = true;
+    dropZone.classList.add("bg-gray-100");
   }
 
-  function handleDragLeave(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    isDragging = false;
+  function handleDragLeave() {
+    dropZone.classList.remove("bg-gray-100");
   }
 
   async function processFiles(fileList) {
@@ -148,14 +117,14 @@
 
   async function handleApplyThreshold() {
     try {
-      const filePath = "similarity_results.json";
+      const filePath = "configs.json";
 
-      // Tính toán với trọng số -2/35
-      const calculatedValue = (similarityThreshold * (-2 / 35)).toFixed(2);
+      // Tính toán với trọng số -2/35 không làm tròn
+      const calculatedValue = similarityThreshold * (-2 / 35);
 
       // Tạo đối tượng dữ liệu chỉ với giá trị đã tính toán
       const data = {
-        calculatedValue: parseFloat(calculatedValue),
+        calculatedValue: calculatedValue,
       };
 
       // Đọc file cũ nếu tồn tại
@@ -180,15 +149,6 @@
     }
   }
 </script>
-
-<svelte:head>
-  <style>
-    /* Ngăn chặn hành vi mặc định của trình duyệt khi kéo thả */
-    :global(body.dragging *) {
-      pointer-events: none;
-    }
-  </style>
-</svelte:head>
 
 <div class="area">
   <ul class="circles">
@@ -265,17 +225,14 @@
         bind:this={dropZone}
         role="button"
         tabindex="0"
-        class="border-2 border-dashed rounded-lg p-12 flex flex-col items-center justify-center transition-all duration-300 cursor-pointer relative
-          {isDragging
-          ? 'border-blue-500 bg-blue-50 scale-105 shadow-lg'
-          : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'}"
         on:drop={handleDrop}
         on:dragover={handleDragOver}
         on:dragleave={handleDragLeave}
+        class="border-2 border-dashed border-gray-500 rounded-xl p-12 flex flex-col items-center justify-center transition-colors relative"
       >
         {#if loading}
           <div
-            class="absolute inset-0 bg-white/80 flex items-center justify-center rounded-lg"
+            class="absolute inset-0 bg-white/80 flex items-center justify-center"
           >
             <div
               class="w-8 h-8 border-4 border-gray-400 border-t-transparent rounded-full animate-spin"
@@ -285,9 +242,7 @@
 
         <svg
           xmlns="http://www.w3.org/2000/svg"
-          class="h-16 w-16 text-gray-400 mb-4 transition-transform duration-300 {isDragging
-            ? 'scale-110'
-            : ''}"
+          class="h-16 w-16 text-gray-400 transform hover:scale-110 transition-transform"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -299,17 +254,16 @@
             d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
           />
         </svg>
-        <p
-          class="text-gray-600 text-lg font-medium text-center mb-2 transition-colors duration-300 {isDragging
-            ? 'text-blue-600'
-            : ''}"
-        >
+        <p class="text-gray-600 text-lg font-medium text-center">
           Kéo & thả file vào đây
         </p>
-        <p class="text-gray-400 text-sm mb-4">hoặc</p>
+        <p class="text-gray-400 text-sm mb-2">hoặc</p>
         <button
           on:click={handleFileSelect}
-          class="px-6 py-2 bg-[#343434] text-white rounded-lg hover:bg-gray-700 transition-all duration-200 hover:shadow-md hover:scale-105"
+          disabled={loading}
+          class="px-6 py-3 bg-[#343434] text-white text-sm font-medium rounded-lg hover:bg-gray-700 transform hover:scale-105 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50 {loading
+            ? 'opacity-50 cursor-not-allowed'
+            : ''}"
         >
           Chọn file
         </button>
