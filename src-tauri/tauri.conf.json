@@ -12,7 +12,14 @@
   },
   "tauri": {
     "allowlist": {
-      "all": true
+      "all": true,
+      "fs": {
+        "readFile": true,
+        "writeFile": true,
+        "scope": [
+          "**"
+        ]
+      }
     },
     "bundle": {
       "active": true,
@@ -60,10 +67,10 @@
     "windows": [
       {
         "fullscreen": false,
-        "height": 600,
+        "maximized": true,
         "resizable": true,
-        "title": "admin",
-        "width": 800
+        "title": "admin tool",
+        "decorations": true
       }
     ]
   }
