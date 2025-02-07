@@ -124,25 +124,13 @@
 
       // Tạo đối tượng dữ liệu chỉ với giá trị đã tính toán
       const data = {
-        calculatedValue: calculatedValue,
+        Value: calculatedValue,
       };
 
-      // Đọc file cũ nếu tồn tại
-      let existingData = [];
-      try {
-        const fileContent = await readTextFile(filePath);
-        existingData = JSON.parse(fileContent);
-      } catch (error) {
-        console.log("Tạo file mới");
-      }
+      // Ghi trực tiếp vào file JSON, ghi đè file cũ nếu có
+      await writeTextFile(filePath, JSON.stringify(data, null, 2));
 
-      // Thêm dữ liệu mới vào mảng
-      existingData.push(data);
-
-      // Ghi vào file JSON
-      await writeTextFile(filePath, JSON.stringify(existingData, null, 2));
-
-      showNotification("Đã lưu kết quả thành công!", "success");
+      showNotification("Đã lưu ngưỡng trùng thành công!", "success");
     } catch (error) {
       console.error("Lỗi khi xử lý:", error);
       showNotification("Có lỗi xảy ra khi lưu kết quả", "error");
@@ -255,9 +243,9 @@
           />
         </svg>
         <p class="text-gray-600 text-lg font-medium text-center">
-          Kéo & thả file vào đây
+          Tải lên file
         </p>
-        <p class="text-gray-400 text-sm mb-2">hoặc</p>
+        <p class="text-gray-400 text-sm mb-2">Docx</p>
         <button
           on:click={handleFileSelect}
           disabled={loading}
