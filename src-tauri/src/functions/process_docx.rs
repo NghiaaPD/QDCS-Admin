@@ -6,6 +6,7 @@ use docx_rust::DocxFile;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{io::Cursor, sync::LazyLock};
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct Question {
@@ -26,7 +27,12 @@ impl std::fmt::Display for Question {
 }
 
 static MODEL: LazyLock<TextEmbedding> = LazyLock::new(|| {
-    TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
+    let mut options = InitOptions::default();
+    options.model_name = EmbeddingModel::AllMiniLML6V2;
+    options.show_download_progress = true;
+    options.cache_dir = PathBuf::from("FUC-mini");
+        
+    TextEmbedding::try_new(options)
         .expect("Failed to init embedding model")
 });
 

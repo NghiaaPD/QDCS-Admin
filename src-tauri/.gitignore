@@ -7,3 +7,6 @@ msvcp140.dll
 vcruntime140_1.dll
 vcruntime140.dll
 .fastembed_cache
+configs.json
+data.duckdb
+FUC-mini
