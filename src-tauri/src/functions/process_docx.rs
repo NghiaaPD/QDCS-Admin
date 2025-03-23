@@ -10,20 +10,11 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct Question {
+    pub id: String,
     pub text: String,
     pub correct_answer_text: String,
     pub question_embedding: Vec<f32>,
     pub answer_embedding: Vec<f32>,
-}
-
-impl std::fmt::Display for Question {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "Câu hỏi: {}\nĐáp án đúng: {}\nEmbedding câu hỏi: {:?}\nEmbedding đáp án: {:?}",
-            self.text, self.correct_answer_text, self.question_embedding, self.answer_embedding
-        )
-    }
 }
 
 static MODEL: LazyLock<TextEmbedding> = LazyLock::new(|| {
@@ -60,6 +51,7 @@ fn get_table_cell_content(cell_data: &TableCell<'_>) -> String {
 
 fn parse_table(table: &Table<'_>) -> Result<Question> {
     let mut question = Question {
+        id: String::new(),
         text: String::new(),
         correct_answer_text: String::new(),
         question_embedding: Vec::new(),
@@ -147,12 +139,6 @@ pub fn read_docx_content_from_bytes(bytes: &[u8]) -> Result<Vec<Question>> {
         })
         .map(|table| parse_table(table))
         .collect::<Result<Vec<_>>>()?;
-
-    println!("\n=== All Questions ===");
-    for (i, q) in questions.iter().enumerate() {
-        println!("\nQuestion {}:", i + 1);
-        println!("{}", q);
-    }
 
     Ok(questions)
 }

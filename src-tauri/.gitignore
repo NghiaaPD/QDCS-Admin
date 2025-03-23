@@ -10,3 +10,4 @@ vcruntime140.dll
 configs.json
 data.duckdb
 FUC-mini
+.fastembed_cache

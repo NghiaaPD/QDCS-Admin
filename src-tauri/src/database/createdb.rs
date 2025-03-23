@@ -22,3 +22,8 @@ pub fn create_database() -> Result<()> {
 
     Ok(())
 }
+
+// fn main() -> Result<()> {
+//     create_database()?;
+//     Ok(())
+// }
