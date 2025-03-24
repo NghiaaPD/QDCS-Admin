@@ -1,11 +1,10 @@
 use crate::functions::cosine_similarity::calculate_cosine_similarity;
 use crate::middleware::fill_format::EMBEDDING_MODEL;
 use crate::middleware::fill_format::Question;
-use crate::service::load_accurancy::load_similarity_threshold;
+use crate::functions::load_accurancy::load_similarity_threshold;
 use std::collections::HashMap;
 
 pub fn check_duplicate_answers(answers: &Vec<String>) -> Option<(String, String, f32)> {
-    // Load threshold từ config
     let threshold = match load_similarity_threshold() {
         Ok(t) => t,
         Err(_) => return None,
@@ -14,11 +13,9 @@ pub fn check_duplicate_answers(answers: &Vec<String>) -> Option<(String, String,
     if answers.len() < 2 {
         return None;
     }
-    
-    // Tạo embeddings cho tất cả các đáp án
+        
     let mut embeddings = Vec::new();
     for ans in answers {
-        // Bỏ qua các đáp án quá ngắn (ví dụ: "Kai", "Cat", "Hat")
         if ans.len() <= 3 {
             continue;
         }
@@ -28,8 +25,7 @@ pub fn check_duplicate_answers(answers: &Vec<String>) -> Option<(String, String,
             Err(_) => continue,
         }
     }
-    
-    // So sánh từng cặp đáp án có nội dung đủ dài
+
     for i in 0..embeddings.len() {
         for j in (i + 1)..embeddings.len() {
             let similarity = calculate_cosine_similarity(&embeddings[i].1, &embeddings[j].1);
@@ -53,19 +49,17 @@ pub fn check_duplicates_within_question(question: &Question) -> Option<(String, 
     let mut answer_contents: HashMap<String, String> = HashMap::new();
     
     for ans in &question.answers {
-        // Tách phần ký tự đáp án (a., b., v.v.) và nội dung
         if let Some(pos) = ans.find('.') {
             let key = ans[0..pos].trim().to_string();
             let content = ans[pos+1..].trim().to_string();
             
             if !content.is_empty() {
-                // Kiểm tra nếu nội dung này đã tồn tại
                 for (existing_content, existing_key) in &answer_contents {
                     if content.eq_ignore_ascii_case(existing_content) {
                         return Some((
                             format!("{}.{}", existing_key, existing_content),
                             ans.clone(),
-                            1.0 // Trùng hoàn toàn
+                            1.0
                         ));
                     }
                 }
@@ -75,10 +69,8 @@ pub fn check_duplicates_within_question(question: &Question) -> Option<(String, 
         }
     }
     
-    // Không tìm thấy trùng lặp text, kiểm tra embedding
     let threshold = load_similarity_threshold().unwrap_or(0.6);
     
-    // Tạo embeddings cho tất cả đáp án
     let mut embeddings = Vec::new();
     for ans in &question.answers {
         // Tách nội dung đáp án
@@ -112,6 +104,7 @@ pub fn check_duplicates_within_question(question: &Question) -> Option<(String, 
 }
 
 // Hàm mới: Kiểm tra câu hỏi trùng lặp
+#[allow(dead_code)]
 pub fn check_duplicate_questions(questions: &[Question]) -> Vec<(usize, usize, f32)> {
     let threshold = load_similarity_threshold().unwrap_or(0.6);
     let mut duplicates = Vec::new();

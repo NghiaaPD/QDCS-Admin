@@ -11,7 +11,7 @@ use crate::service::querydb::query_db;
 use crate::functions::cosine_similarity::calculate_cosine_similarity;
 use crate::functions::plot_similarity::calculate_similarity_score;
 use crate::middleware::check_duplicate_answers::{check_duplicate_answers, check_duplicates_within_question};
-use crate::service::load_accurancy::load_similarity_threshold;
+use crate::functions::load_accurancy::load_similarity_threshold;
 
 #[tauri::command]
 async fn read_docx(file_data: Vec<u8>) -> Result<String, String> {
@@ -48,9 +48,12 @@ async fn read_docx(file_data: Vec<u8>) -> Result<String, String> {
 
 #[tauri::command]
 async fn process_docx(file_data: Vec<u8>) -> Result<String, String> {
-    let similarity_threshold = match load_similarity_threshold() {
+    let _similarity_threshold = match load_similarity_threshold() {
         Ok(t) => t,
-        Err(e) => return Err(format!("Lỗi khi đọc threshold: {}", e)),
+        Err(e) => {
+            println!("Lỗi khi load threshold: {}", e);
+            0.6
+        }
     };
     
     match read_docx_content_from_bytes(&file_data) {
@@ -62,12 +65,10 @@ async fn process_docx(file_data: Vec<u8>) -> Result<String, String> {
                     let mut results = Vec::new();
                     let mut processed_questions = std::collections::HashSet::new();
                     
-                    // Kiểm tra trùng lặp câu trả lời trong file
                     let all_answers: Vec<String> = questions.iter()
                         .map(|q| q.correct_answer_text.clone())
                         .collect();
                     
-                    // Kiểm tra trùng câu trả lời
                     let duplicate_answers = check_duplicate_answers(&all_answers);
                     
                     for (i, docx_item1) in questions.iter().enumerate() {
@@ -107,7 +108,6 @@ async fn process_docx(file_data: Vec<u8>) -> Result<String, String> {
                             }
                         }
                         
-                        // Nếu chưa tìm thấy trùng lặp trong file, kiểm tra với database
                         if !found_similar && !processed_questions.contains(&docx_item1.text) {
                             let mut max_similarity = None;
                             
@@ -149,8 +149,7 @@ async fn process_docx(file_data: Vec<u8>) -> Result<String, String> {
                                     }
                                 }
                             }
-                            
-                            // Nếu không tìm thấy trùng lặp nào
+
                             if !found_similar {
                                 if let Some((_db_item, (q_sim, a_sim), _)) = max_similarity {
                                     results.push(serde_json::json!({
@@ -195,56 +194,54 @@ async fn process_docx(file_data: Vec<u8>) -> Result<String, String> {
 fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
     use crate::functions::cosine_similarity::calculate_cosine_similarity;
     use crate::functions::plot_similarity::calculate_similarity_score;
-    
-    // Tạo file tạm thời
+
     let temp_dir = std::env::temp_dir();
     let temp_file = temp_dir.join("temp_docx_check.docx");
-    
-    // Ghi dữ liệu vào file tạm
+
     std::fs::write(&temp_file, &file_data)
         .map_err(|e| format!("Không thể tạo file tạm: {}", e))?;
-    
-    // Chuyển đổi path thành chuỗi
+
     let file_path = temp_file.to_str()
         .ok_or("Không thể chuyển đổi đường dẫn file tạm")?;
+
+    let _similarity_threshold = match load_similarity_threshold() {
+        Ok(value) => value,
+        Err(e) => {
+            println!("Lỗi khi load threshold: {}", e);
+            0.6 
+        }
+    };
     
-    // Lấy threshold từ cấu hình
-    let threshold = load_similarity_threshold()
-        .unwrap_or(0.6); // Giảm xuống 0.6 để phát hiện trùng lặp tốt hơn
-    
-    // Đọc nội dung file DOCX
+    println!("Đang sử dụng threshold: {}", _similarity_threshold);
+
     let questions = crate::middleware::fill_format::read_docx_content(file_path)
         .map_err(|e| format!("Lỗi khi đọc file DOCX: {}", e))?;
     
-    let mut result_text = format!("Tổng số câu hỏi: {}\n\n", questions.len());
+    let _result_text = format!("Tổng số câu hỏi: {}\n\n", questions.len());
     let mut result_items = Vec::new();
     let mut duplicate_answers_info = Option::<(String, String, f32)>::None;
 
-    // Truy vấn dữ liệu từ database (cặp question_embedding và answer_embedding)
     let db_embeddings = match query_db() {
         Ok(embeddings) => embeddings,
         Err(e) => {
             println!("Lỗi khi truy vấn database: {}", e);
-            Vec::new() // Nếu không truy vấn được DB, sử dụng vector rỗng
+            Vec::new() 
         }
     };
     
-    // Phân tích từng câu hỏi và kiểm tra trùng lặp
     for (i, q1) in questions.iter().enumerate() {
         let mut is_similar = false;
         let mut similarity_score = 0.0;
-        let mut similarity_type = "none"; // Mặc định là không trùng
+        let mut similarity_type = "none"; 
         let mut similar_to = String::new();
 
-        // 1. Kiểm tra trùng đáp án trong cùng câu hỏi
         if let Some((ans1, ans2, sim)) = check_duplicates_within_question(q1) {
             duplicate_answers_info = Some((ans1.clone(), ans2.clone(), sim));
             is_similar = true;
             similarity_score = sim;
-            similarity_type = "question"; // Trùng trong cùng câu
+            similarity_type = "question";
             similar_to = format!("Trùng trong cùng câu hỏi: {} và {}", ans1, ans2);
         }
-        // 2. Nếu không trùng trong câu, kiểm tra với câu khác trong file
         else {
             for (j, q2) in questions.iter().enumerate() {
                 if i != j {
@@ -258,17 +255,16 @@ fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
                         &q2.answer_embedding
                     );
                     
-                    if question_similarity > threshold && answer_similarity > threshold {
+                    if question_similarity > _similarity_threshold && answer_similarity > _similarity_threshold {
                         is_similar = true;
                         similarity_score = calculate_similarity_score(question_similarity, answer_similarity);
-                        similarity_type = "file"; // Trùng trong file
+                        similarity_type = "file"; 
                         similar_to = format!("Trùng trong file: {} và {}", q1.text, q2.text);
                         break;
                     }
                 }
             }
 
-            // 3. Nếu không trùng trong file, kiểm tra với database
             if !is_similar && !db_embeddings.is_empty() {
                 let mut max_db_similarity = 0.0;
                 
@@ -284,59 +280,49 @@ fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
                     }
                 }
                 
-                if max_db_similarity > threshold {
+                if max_db_similarity > _similarity_threshold {
                     is_similar = true;
                     similarity_score = max_db_similarity;
-                    similarity_type = "database"; // Trùng với database
+                    similarity_type = "database";
                     similar_to = format!("Trùng với câu hỏi trong database có độ tương đồng {:.2}%", max_db_similarity * 100.0);
                 }
             }
         }
 
-        // Tạo mảng câu trả lời đúng định dạng (với a., b., c.,...)
         let formatted_answers: Vec<String> = q1.answers.iter()
             .enumerate()
             .filter_map(|(i, ans)| {
-                // Loại bỏ các đáp án không có nội dung
                 let trimmed = ans.trim();
                 if trimmed.is_empty() {
                     return None;
                 }
 
-                // Kiểm tra nếu đáp án chỉ là chữ cái (như "b", "c", ...)
                 let letter = char::from(b'a' + (i as u8 % 26));
-                let letter_prefix = format!("{}. ", letter);
+                let _letter_prefix = format!("{}. ", letter);
                 
-                // Nếu đáp án trống hoặc chỉ chứa ký tự của nó (b. b, c. c, v.v.) thì bỏ qua
                 if trimmed == letter.to_string() || 
                    trimmed == format!("{}.", letter) ||
                    trimmed == format!("{}. {}", letter, letter) ||
                    trimmed == format!("{}. {}.", letter, letter) {
                     return None;
                 }
-                
-                // Trả về đáp án có format
+
                 Some(format!("{}. {}", letter, trimmed))
             })
             .collect();
 
-        // Xử lý đáp án đúng
         let docx_answer: String;
         if q1.correct_answers.len() == 1 {
-            // Nếu chỉ có 1 đáp án đúng
             docx_answer = q1.correct_answers[0].clone();
         } else {
-            // Nếu có nhiều đáp án đúng
             docx_answer = q1.correct_answers.join(", ");
         }
 
-        // Đảm bảo correct_answer_keys luôn là chữ thường
         let correct_answer_keys: Vec<String> = q1.correct_answer_keys
             .iter()
             .map(|key| key.to_lowercase())
             .collect();
 
-        // Thêm dữ liệu câu hỏi vào kết quả
         let item = serde_json::json!({
             "id": q1.id,
             "docx_question": q1.text,
@@ -346,13 +332,13 @@ fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
             "answers": formatted_answers,
             "correct_answer_keys": correct_answer_keys,
             "correct_answers": q1.correct_answers,
-            "similarity_type": similarity_type
+            "similarity_type": similarity_type,
+            "similar_to": similar_to
         });
 
         result_items.push(item);
     }
     
-    // Tạo kết quả cuối cùng
     let result = serde_json::json!({
         "similarities": result_items,
         "db_count": db_embeddings.len(),
@@ -365,7 +351,6 @@ fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
     }
 }
 
-// Hàm main chính cho ứng dụng Tauri
 #[cfg(not(feature = "test_fill_format"))]
 fn main() {
     tauri::Builder::default()
@@ -374,7 +359,6 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-// Hàm main riêng để kiểm thử fill_format_check
 #[cfg(feature = "test_fill_format")]
 fn main() {
     use std::env;
@@ -385,7 +369,6 @@ fn main() {
     
     println!("=== CHẾ ĐỘ KIỂM THỬ FILL_FORMAT_CHECK ===");
     
-    // Lấy đường dẫn file từ tham số dòng lệnh hoặc yêu cầu nhập
     let args: Vec<String> = env::args().collect();
     let file_path = if args.len() > 1 {
         args[1].clone()
@@ -395,16 +378,14 @@ fn main() {
         io::stdin().read_line(&mut input).expect("Không thể đọc input");
         input.trim().to_string()
     };
-    
-    // Kiểm tra file tồn tại
+
     if !fs::metadata(&file_path).is_ok() {
         eprintln!("Lỗi: File không tồn tại: {}", file_path);
         process::exit(1);
     }
     
     println!("Đang kiểm tra file: {}", file_path);
-    
-    // Đọc nội dung file
+
     let file_data = match fs::read(&file_path) {
         Ok(data) => data,
         Err(e) => {
@@ -417,18 +398,15 @@ fn main() {
     match fill_format_check(file_data) {
         Ok(json_str) => {
             println!("\n=== KẾT QUẢ KIỂM TRA ===");
-            
-            // Parse JSON để định dạng lại output
+
             let result: Value = serde_json::from_str(&json_str).unwrap_or_else(|e| {
                 eprintln!("Lỗi phân tích JSON: {}", e);
                 process::exit(1);
             });
-            
-            // In thông tin tổng quan
+
             println!("Tổng số câu hỏi: {}", result["similarities"].as_array().unwrap_or(&Vec::new()).len());
             println!("Số câu hỏi trong DB: {}", result["db_count"].as_u64().unwrap_or(0));
-            
-            // In thông tin cho từng câu hỏi, với định dạng tốt hơn
+
             if let Some(similarities) = result["similarities"].as_array() {
                 for (i, item) in similarities.iter().enumerate() {
                     println!("\n--- Câu hỏi {} ---", i + 1);
@@ -443,8 +421,7 @@ fn main() {
                     }
                     
                     println!("Đáp án đúng: {}", item["docx_answer"].as_str().unwrap_or(""));
-                    
-                    // In thông tin về trùng lặp
+
                     println!("TAG TRÙNG: {}", item["similarity_type"].as_str().unwrap_or("không trùng lặp"));
                 }
             }

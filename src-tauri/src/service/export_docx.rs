@@ -1,6 +1,7 @@
 use docx_rust::document::{BodyContent, ParagraphContent, RunContent, TableCellContent, TableRowContent};
 use docx_rust::DocxFile;
 
+#[allow(dead_code)]
 pub struct QuestionData {
     pub qn: String,
     pub question: String,
@@ -15,6 +16,7 @@ pub struct QuestionData {
     pub reference: String,
 }
 
+#[allow(dead_code)]
 pub fn extract_questions_from_docx(file_path: &str) -> Result<Vec<QuestionData>, Box<dyn std::error::Error>> {
     // Đọc và parse document
     let doc_file = DocxFile::from_file(file_path)?;
@@ -76,7 +78,7 @@ pub fn extract_questions_from_docx(file_path: &str) -> Result<Vec<QuestionData>,
     Ok(questions)
 }
 
-// Sửa lại tên hàm để tránh nhầm lẫn và sửa irrefutable if let pattern
+#[allow(dead_code)]
 fn extract_text_from_row_cell(cell: &TableRowContent) -> String {
     match cell {
         TableRowContent::TableCell(cell_data) => {

@@ -3,13 +3,16 @@ use docx_rust::document::{BodyContent, ParagraphContent, RunContent, TableRowCon
 use std::path::Path;
 use std::sync::LazyLock;
 use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
+use std::path::PathBuf;
 
 pub static EMBEDDING_MODEL: LazyLock<TextEmbedding> = LazyLock::new(|| {
     let mut options = InitOptions::default();
     options.model_name = EmbeddingModel::AllMiniLML6V2;
-    options.show_download_progress = false;
+    options.show_download_progress = true;
+    options.cache_dir = PathBuf::from("FUC-mini");
     
-    TextEmbedding::try_new(options).unwrap()
+    TextEmbedding::try_new(options)
+        .expect("Failed to init embedding model")
 });
 
 pub fn extract_cell_text(cell: &TableRowContent) -> String {

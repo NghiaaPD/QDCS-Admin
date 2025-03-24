@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub struct Question {
+    #[allow(dead_code)]
     pub id: String,
     pub text: String,
     pub correct_answer_text: String,

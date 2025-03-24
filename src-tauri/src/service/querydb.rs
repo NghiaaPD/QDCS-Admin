@@ -26,6 +26,7 @@ pub fn query_db() -> Result<Vec<(Vec<f32>, Vec<f32>)>> {
     Ok(embeddings)
 }
 
+#[allow(dead_code)]
 fn main() -> Result<()> {
     let embeddings = query_db()?;
     
