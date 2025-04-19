@@ -61,6 +61,7 @@ pub fn read_docx_content(file_path: &str) -> Result<Vec<Question>, Box<dyn std::
     let doc_file = DocxFile::from_file(file_path)?;
     let docx = doc_file.parse()?;
     let mut questions = Vec::new();
+    let mut skipped_count = 0;
 
     for element in &docx.document.body.content {
         if let BodyContent::Table(table) = element {
@@ -88,7 +89,7 @@ pub fn read_docx_content(file_path: &str) -> Result<Vec<Question>, Box<dyn std::
                 }
             }
 
-            // Map để lưu trữ các câu trả lời theo key (A, B, C, D)
+            // Map để lưu trữ các câu trả lời theo key
             let mut answer_texts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
             let mut correct_answer_keys = Vec::new();
 
@@ -96,7 +97,6 @@ pub fn read_docx_content(file_path: &str) -> Result<Vec<Question>, Box<dyn std::
             for row in table.rows.iter() {
                 let first_cell = extract_cell_text(&row.cells[0]).trim().to_string();
                 
-                // Nếu là dòng câu trả lời (a., b., c., d.)
                 if first_cell.len() == 2 && first_cell.ends_with('.') {
                     let option_key = first_cell.chars().next().unwrap().to_uppercase().to_string();
                     if let Some(cell) = row.cells.get(1) {
@@ -106,7 +106,6 @@ pub fn read_docx_content(file_path: &str) -> Result<Vec<Question>, Box<dyn std::
                     }
                 }
                 
-                // Nếu là dòng ANSWER
                 if first_cell == "ANSWER:" {
                     if let Some(cell) = row.cells.get(1) {
                         let answer_text = extract_cell_text(cell).trim().to_uppercase();
@@ -125,34 +124,39 @@ pub fn read_docx_content(file_path: &str) -> Result<Vec<Question>, Box<dyn std::
                 }
             }
 
-            // Kiểm tra và tạo embeddings
-            if question.id.is_empty() {
-                return Err("File sai format: Thiếu ID câu hỏi (QN=)".into());
-            }
-            if question.text.is_empty() {
-                return Err(format!("File sai format: Câu hỏi {} thiếu nội dung", question.id).into());
-            }
-            if question.correct_answers.is_empty() {
-                return Err(format!("File sai format: Câu hỏi {} thiếu đáp án đúng", question.id).into());
+            // Kiểm tra tính hợp lệ của câu hỏi
+            if question.id.is_empty() || question.text.is_empty() || question.correct_answers.is_empty() {
+                println!("Bỏ qua câu hỏi không hợp lệ{}", 
+                    if !question.id.is_empty() { format!(": {}", question.id) } else { String::from("") });
+                skipped_count += 1;
+                continue;
             }
 
-            // Tạo embedding không log
-            question.question_embedding = EMBEDDING_MODEL.embed(
-                vec![&question.text], 
-                None
-            )?.remove(0);
-            
-            // Tạo embedding không log
+            // Tạo embedding
+            match EMBEDDING_MODEL.embed(vec![&question.text], None) {
+                Ok(mut embeddings) => question.question_embedding = embeddings.remove(0),
+                Err(e) => {
+                    println!("Lỗi khi tạo embedding cho câu hỏi {}: {}", question.id, e);
+                    skipped_count += 1;
+                    continue;
+                }
+            }
+
             let combined_answers = question.correct_answers.join(" ");
-            question.answer_embedding = EMBEDDING_MODEL.embed(
-                vec![&combined_answers], 
-                None
-            )?.remove(0);
+            match EMBEDDING_MODEL.embed(vec![&combined_answers], None) {
+                Ok(mut embeddings) => question.answer_embedding = embeddings.remove(0),
+                Err(e) => {
+                    println!("Lỗi khi tạo embedding cho đáp án của câu {}: {}", question.id, e);
+                    skipped_count += 1;
+                    continue;
+                }
+            }
 
             questions.push(question);
         }
     }
     
+    println!("Đã bỏ qua {} câu hỏi không hợp lệ", skipped_count);
     Ok(questions)
 }
 

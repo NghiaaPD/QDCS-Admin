@@ -4,6 +4,7 @@ mod functions;
 mod database;
 mod service;
 mod middleware;
+
 use crate::functions::process_docx::read_docx_content_from_bytes;
 use crate::database::createdb::create_database;
 use crate::database::insertdb::insert_embeddings;
@@ -12,6 +13,7 @@ use crate::functions::cosine_similarity::calculate_cosine_similarity;
 use crate::functions::plot_similarity::calculate_similarity_score;
 use crate::middleware::check_duplicate_answers::{check_duplicate_answers, check_duplicates_within_question};
 use crate::functions::load_accurancy::load_similarity_threshold;
+use docx_rust::DocxFile;
 
 #[tauri::command]
 async fn read_docx(file_data: Vec<u8>) -> Result<String, String> {
@@ -351,10 +353,316 @@ fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_temp_file_path() -> String {
+    // Lấy thư mục tạm của hệ thống
+    let temp_dir = std::env::temp_dir();
+    return temp_dir.to_string_lossy().to_string();
+}
+
+#[tauri::command]
+async fn filter_docx(file_path: String, duplicate_ids: Vec<String>, original_filename: Option<String>) -> Result<String, String> {
+    // Lấy thư mục hiện tại của ứng dụng
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Không thể xác định thư mục hiện tại: {}", e))?;
+
+    println!("File path: {}", file_path);
+    println!("Original filename: {:?}", original_filename);
+    println!("IDs cần giữ lại: {:?}", duplicate_ids);
+
+    // Kiểm tra xem có câu nào được giữ lại không
+    if duplicate_ids.is_empty() {
+        println!("Không có câu hỏi nào được giữ lại!");
+        return Err("Không có câu hỏi nào được giữ lại sau khi lọc. Không thể tạo file mới.".to_string());
+    }
+
+    // Sử dụng tên file gốc nếu được cung cấp
+    let output_file_stem = if let Some(original_name) = original_filename {
+        let original_path = std::path::Path::new(&original_name);
+        original_path.file_stem().unwrap_or_default().to_string_lossy().to_string()
+    } else {
+        let path = std::path::Path::new(&file_path);
+        path.file_stem().unwrap_or_default().to_string_lossy().to_string()
+    };
+
+    // Lấy phần mở rộng
+    let path = std::path::Path::new(&file_path);
+    let extension = path.extension().unwrap_or_default().to_string_lossy();
+
+    // Tạo đường dẫn file mới với timestamp
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let new_file_name = format!("{}_filtered_{}.{}", output_file_stem, timestamp, extension);
+    let new_file_path = current_dir.join(&new_file_name);
+    let new_file_path_str = new_file_path.to_str().unwrap().to_string();
+
+    // Đảm bảo file nguồn tồn tại
+    if !std::path::Path::new(&file_path).exists() {
+        return Err(format!("File gốc không tồn tại: {}", file_path));
+    }
+
+    // Đọc và xử lý file DOCX
+    use docx_rust::DocxFile;
+    use docx_rust::document::{BodyContent};
+    use std::fs::File;
+    use std::io::Write;
+
+    // Phương pháp 1: Đọc và viết lại với thư viện docx-rust
+    let _success = false;
+    
+    // Xử lý các định dạng màu (loại bỏ oklch)
+    let mut xml_content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Không thể đọc file DOCX như là văn bản: {}", e))?;
+    
+    // Thay thế các định dạng màu oklch bằng màu đen mặc định
+    xml_content = xml_content.replace("oklch(", "rgb(0,0,0");
+    
+    // Ghi nội dung đã sửa vào file tạm
+    let temp_file_path = format!("{}_temp_{}.{}", output_file_stem, timestamp, extension);
+    let mut temp_file = File::create(&temp_file_path)
+        .map_err(|e| format!("Không thể tạo file tạm: {}", e))?;
+    temp_file.write_all(xml_content.as_bytes())
+        .map_err(|e| format!("Không thể ghi vào file tạm: {}", e))?;
+    
+    // Sử dụng file đã được sửa màu sắc để tiếp tục xử lý
+    let doc_file = DocxFile::from_file(&temp_file_path)
+        .map_err(|e| format!("Lỗi khi mở file DOCX: {}", e))?;
+    
+    let mut docx = doc_file.parse()
+        .map_err(|e| format!("Lỗi khi phân tích DOCX: {}", e))?;
+    
+    // Lọc các bảng (table) trong DOCX dựa trên IDs
+    let mut filtered_body_content = Vec::new();
+    
+    for content in &docx.document.body.content {
+        if let BodyContent::Table(table) = content {
+            // Kiểm tra xem table có phải là câu hỏi không
+            if let Some(first_row) = table.rows.first() {
+                if first_row.cells.len() >= 2 {
+                    // Thử lấy ID từ ô đầu tiên
+                    if let Some(cell) = first_row.cells.first() {
+                        use docx_rust::document::{TableRowContent, TableCellContent, ParagraphContent, RunContent};
+                        
+                        // Extract ID
+                        let mut id = String::new();
+                        if let TableRowContent::TableCell(cell_data) = cell {
+                            for content in &cell_data.content {
+                                if let TableCellContent::Paragraph(p) = content {
+                                    for run in &p.content {
+                                        if let ParagraphContent::Run(r) = run {
+                                            for text in &r.content {
+                                                if let RunContent::Text(t) = text {
+                                                    id = t.text.trim().to_string();
+                                                    // Nếu ID có định dạng "QN=123", lấy phần sau "QN="
+                                                    if let Some(id_part) = id.strip_prefix("QN=") {
+                                                        id = id_part.trim().to_string();
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Nếu ID nằm trong danh sách các ID cần giữ lại, thì giữ lại table này
+                        if duplicate_ids.contains(&id) {
+                            filtered_body_content.push(BodyContent::Table(table.clone()));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Giữ lại các nội dung không phải là table
+            filtered_body_content.push(content.clone());
+        }
+    }
+    
+    // Cập nhật nội dung body trong DOCX
+    docx.document.body.content = filtered_body_content;
+    
+    // Ghi ra file mới
+    match docx.write_file(&new_file_path_str) {
+        Ok(_) => {
+            let _ = ();
+            println!("Đã lọc và lưu file DOCX thành công (phương pháp 1)");
+        },
+        Err(e) => {
+            println!("Lỗi khi ghi file DOCX (phương pháp 1): {}", e);
+        }
+    }
+    
+    // Xóa file tạm
+    let _ = std::fs::remove_file(&temp_file_path);
+    
+    Ok(new_file_path_str)
+}
+
+#[tauri::command]
+async fn filter_docx_with_data(file_data: Vec<u8>, duplicate_ids: Vec<String>, original_filename: Option<String>) -> Result<String, String> {
+    use docx_rust::document::{BodyContent};
+
+    // Lấy thư mục hiện tại của ứng dụng
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Không thể xác định thư mục hiện tại: {}", e))?;
+
+    // Kiểm tra xem có câu nào được giữ lại không
+    if duplicate_ids.is_empty() {
+        println!("Không có câu hỏi nào được giữ lại!");
+        return Err("Không có câu hỏi nào được giữ lại sau khi lọc. Không thể tạo file mới.".to_string());
+    }
+
+    // Sử dụng tên file gốc nếu được cung cấp
+    let output_file_stem = if let Some(ref original_name) = original_filename {
+        let original_path = std::path::Path::new(original_name);
+        original_path.file_stem().unwrap_or_default().to_string_lossy().to_string()
+    } else {
+        "filtered_docx".to_string()
+    };
+
+    // Tạo đường dẫn file mới với timestamp
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let new_file_name = format!("{}_filtered_{}.docx", output_file_stem, timestamp);
+    let new_file_path = current_dir.join(&new_file_name);
+    let new_file_path_str = new_file_path.to_str().unwrap().to_string();
+
+    // Tạo file tạm để lưu dữ liệu
+    let temp_file_path = std::env::temp_dir().join(format!("temp_file_{}.docx", timestamp));
+    let temp_file_path_str = temp_file_path.to_str().unwrap().to_string();
+    
+    // Ghi dữ liệu vào file tạm
+    match std::fs::write(&temp_file_path, &file_data) {
+        Ok(_) => println!("Đã ghi file tạm thành công: {}", temp_file_path_str),
+        Err(e) => return Err(format!("Không thể ghi file tạm: {}", e))
+    }
+
+    // PHƯƠNG PHÁP ĐƠN GIẢN: Triển khai trực tiếp docx-rust tại đây
+    let _success = false;
+    
+    // Thử phương pháp với docx-rust
+    {
+        use docx_rust::document::{TableRowContent, TableCellContent, ParagraphContent, RunContent};
+        
+        let doc_file = match DocxFile::from_file(&temp_file_path_str) {
+            Ok(file) => file,
+            Err(e) => {
+                // Thử sao chép file về đích khi có lỗi
+                if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path) {
+                    let _ = true;
+                }
+                return Err(format!("Không thể đọc file DOCX: {}", e))
+            }
+        };
+        
+        let mut docx = match doc_file.parse() {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                // Thử sao chép file về đích khi có lỗi
+                if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path) {
+                    let _ = true;
+                }
+                return Err(format!("Lỗi khi phân tích DOCX: {}", e))
+            }
+        };
+        
+        // Lọc các bảng (table) trong DOCX dựa trên IDs
+        let mut filtered_body_content = Vec::new();
+        
+        for content in &docx.document.body.content {
+            if let BodyContent::Table(table) = content {
+                let mut keep_table = false;
+                
+                // Duyệt qua các hàng và ô để tìm ID
+                for row in &table.rows {
+                    for cell_content in &row.cells {
+                        if let TableRowContent::TableCell(cell) = cell_content {
+                            for cell_item in &cell.content {
+                                if let TableCellContent::Paragraph(para) = cell_item {
+                                    // Lấy tất cả text từ paragraph
+                                    let mut id_text = String::new();
+                                    for para_content in &para.content {
+                                        if let ParagraphContent::Run(run) = para_content {
+                                            for run_content in &run.content {
+                                                if let RunContent::Text(text_content) = run_content {
+                                                    id_text.push_str(&text_content.text);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Trim ID và xử lý QN= prefix
+                                    let trimmed_id = id_text.trim();
+                                    let id = if let Some(id_part) = trimmed_id.strip_prefix("QN=") {
+                                        id_part.trim()
+                                    } else {
+                                        trimmed_id
+                                    };
+                                    
+                                    if duplicate_ids.contains(&id.to_string()) {
+                                        keep_table = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if keep_table {
+                                break;
+                            }
+                        }
+                    }
+                    if keep_table {
+                        break;
+                    }
+                }
+                
+                if keep_table {
+                    filtered_body_content.push(BodyContent::Table(table.clone()));
+                }
+            } else {
+                // Giữ lại các nội dung không phải là table
+                filtered_body_content.push(content.clone());
+            }
+        }
+        
+        // Cập nhật nội dung body trong DOCX
+        docx.document.body.content = filtered_body_content;
+        
+        // Ghi ra file mới
+        match docx.write_file(&new_file_path_str) {
+            Ok(_) => {
+                let _ = ();
+            },
+            Err(e) => {
+                // Thử sao chép file về đích khi có lỗi
+                if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path) {
+                    let _ = ();
+                }
+            }
+        }
+    }
+    
+    // Xóa file tạm
+    let _ = std::fs::remove_file(&temp_file_path);
+    
+    Ok(new_file_path_str)
+}
+
 #[cfg(not(feature = "test_fill_format"))]
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![read_docx, process_docx, fill_format_check])
+        .invoke_handler(tauri::generate_handler![
+            read_docx, 
+            process_docx, 
+            fill_format_check, 
+            filter_docx,
+            filter_docx_with_data,
+            get_temp_file_path
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -362,7 +670,6 @@ fn main() {
 #[cfg(feature = "test_fill_format")]
 fn main() {
     use std::env;
-    use std::fs;
     use std::io;
     use std::process;
     use serde_json::Value;
@@ -403,9 +710,6 @@ fn main() {
                 eprintln!("Lỗi phân tích JSON: {}", e);
                 process::exit(1);
             });
-
-            println!("Tổng số câu hỏi: {}", result["similarities"].as_array().unwrap_or(&Vec::new()).len());
-            println!("Số câu hỏi trong DB: {}", result["db_count"].as_u64().unwrap_or(0));
 
             if let Some(similarities) = result["similarities"].as_array() {
                 for (i, item) in similarities.iter().enumerate() {

@@ -14,6 +14,11 @@
   let showResults = false;
   let similarities = [];
   let duplicateAnswers = null;
+  let selectedQuestionsToKeep = [];
+  let originalFileName;
+  let tempFilePath;
+  let fileData = null;
+  let exportLoading = false;
 
   function showNotification(message, type = "error") {
     notification = { message, type };
@@ -30,6 +35,7 @@
     const selectedFiles = Array.from(event.target.files).map((file) => ({
       name: file.name,
       file: file,
+      path: file.path || "",
     }));
     processFiles(selectedFiles);
   }
@@ -142,79 +148,60 @@
   }
 
   async function processCheckFiles() {
+    if (files.length === 0) {
+      return;
+    }
+
     loading = true;
+    selectedQuestionsToKeep = []; // Reset danh sách câu hỏi đã chọn
+
     try {
-      for (const file of files) {
-        const arrayBuffer = await file.file.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-        const fileBytes = Array.from(uint8Array);
+      const fileArrayBuffer = await files[0].file.arrayBuffer();
+      fileData = Array.from(new Uint8Array(fileArrayBuffer)); // Lưu lại dữ liệu file để dùng sau
 
-        // Gọi API fill_format_check
-        const result = await invoke("fill_format_check", {
-          fileData: fileBytes,
-        });
+      // Lưu tên file gốc
+      originalFileName = files[0].name;
 
-        const parsedResult = JSON.parse(result);
+      // Lưu file tạm (nhưng chúng ta sẽ gửi lại fileData khi xuất)
+      tempFilePath = await invoke("get_temp_file_path");
 
-        // Xử lý thông tin trùng đáp án trong cùng câu hỏi
-        if (parsedResult.duplicate_answers) {
-          duplicateAnswers = {
-            answer1: parsedResult.duplicate_answers[0],
-            answer2: parsedResult.duplicate_answers[1],
-            similarity: parsedResult.duplicate_answers[2] + "%",
-          };
-        } else {
-          duplicateAnswers = null;
+      const result = await invoke("fill_format_check", {
+        fileData: fileData,
+      });
+
+      const parsed = JSON.parse(result);
+      similarities = parsed.similarities;
+
+      // Sửa lại: Chỉ giữ lại ID của các câu KHÔNG trùng
+      selectedQuestionsToKeep = similarities
+        .filter((item) => {
+          return (
+            !item.similarity_type ||
+            item.similarity_type === "" ||
+            item.similarity_type === "none"
+          );
+        })
+        .map((item) => item.id);
+
+      console.log(
+        "Danh sách ID câu không trùng sẽ giữ lại:",
+        selectedQuestionsToKeep,
+      );
+
+      showResults = true;
+
+      // Cuộn xuống phần kết quả
+      setTimeout(() => {
+        const resultsSection = document.getElementById("results-section");
+        if (resultsSection) {
+          resultsSection.scrollIntoView({ behavior: "smooth" });
         }
-
-        // Map dữ liệu từ API về dạng hiển thị
-        similarities = parsedResult.similarities.map((item) => ({
-          ...item,
-          docx_question: item.docx_question || "Không có câu hỏi",
-          docx_answer: item.docx_answer || "Không có đáp án",
-          // Không cần xử lý similarity_score nữa vì API đã trả về định dạng phần trăm
-          is_similar: !!item.is_similar,
-          answers: item.answers || [],
-          correct_answer_keys: item.correct_answer_keys || [],
-          correct_answers: item.correct_answers || [],
-        }));
-
-        showResults = true;
-        showNotification("Kiểm tra hoàn tất!", "success");
-      }
+      }, 100);
     } catch (error) {
-      showNotification(`Lỗi: ${error}`, "error");
+      showNotification(`Lỗi khi kiểm tra trùng lặp: ${error}`, "error");
+      console.error("Lỗi:", error);
     } finally {
       loading = false;
-    }
-  }
-
-  // Helper function to export results to PDF (dựa trên html2pdf.js)
-  async function exportToPDF() {
-    try {
-      // Note: Require using html2pdf.js library, needs to be installed
-      // npm install html2pdf.js
-      if (typeof html2pdf === "undefined") {
-        showNotification(
-          "html2pdf không được tìm thấy, vui lòng cài đặt thư viện",
-          "error",
-        );
-        return;
-      }
-
-      const element = document.getElementById("results-section");
-      const opt = {
-        margin: 10,
-        filename: "bao-cao-kiem-tra-trung-lap.pdf",
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      };
-
-      await html2pdf().from(element).set(opt).save();
-      showNotification("Đã xuất PDF thành công!", "success");
-    } catch (error) {
-      showNotification("Lỗi khi xuất PDF: " + error, "error");
     }
   }
 
@@ -258,6 +245,47 @@
         };
       })
       .filter((option) => !option.isEmpty); // Lọc bỏ các đáp án trống ngay tại đây
+  }
+
+  function toggleQuestionSelection(id) {
+    if (selectedQuestionsToKeep.includes(id)) {
+      selectedQuestionsToKeep = selectedQuestionsToKeep.filter(
+        (qId) => qId !== id,
+      );
+    } else {
+      selectedQuestionsToKeep = [...selectedQuestionsToKeep, id];
+    }
+  }
+
+  async function filterAndExportDocx() {
+    if (selectedQuestionsToKeep.length === 0) {
+      showNotification(
+        "Không có câu hỏi nào không trùng lặp, vui lòng kiểm tra lại",
+      );
+      return;
+    }
+
+    if (!fileData) {
+      showNotification("Không tìm thấy dữ liệu file. Vui lòng tải lại file.");
+      return;
+    }
+
+    exportLoading = true;
+    try {
+      console.log("Đang gửi IDs để giữ lại:", selectedQuestionsToKeep);
+      // Gửi cả fileData thay vì chỉ đường dẫn file
+      const result = await invoke("filter_docx_with_data", {
+        fileData: fileData,
+        duplicateIds: selectedQuestionsToKeep,
+        originalFilename: originalFileName,
+      });
+
+      showNotification(`Đã lọc và xuất file: ${result}`, "success");
+    } catch (error) {
+      showNotification(`Lỗi khi lọc file: ${error}`);
+    } finally {
+      exportLoading = false;
+    }
   }
 </script>
 
@@ -609,18 +637,32 @@
         >
           <div class="flex justify-between items-center mb-6">
             <h2 class="text-2xl font-bold">Kết quả kiểm tra</h2>
-            <button
-              on:click={exportToPDF}
-              class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none"
-            >
-              Xuất PDF
-            </button>
+            <div class="flex space-x-2">
+              <button
+                on:click={filterAndExportDocx}
+                class="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 focus:outline-none {exportLoading
+                  ? 'opacity-70 cursor-wait'
+                  : ''}"
+                disabled={exportLoading}
+              >
+                {#if exportLoading}
+                  <span
+                    class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"
+                  ></span>
+                {/if}
+                Lọc & Xuất DOCX
+              </button>
+            </div>
           </div>
 
           <!-- Danh sách câu hỏi -->
           <div class="space-y-6">
             {#each similarities as item, index}
-              <div class="p-5 bg-white border rounded-lg shadow-sm">
+              <div
+                class="p-5 bg-white border rounded-lg shadow-sm {item.similarity_type
+                  ? 'border-red-200'
+                  : 'border-green-200'}"
+              >
                 <div class="flex items-center justify-between mb-3">
                   <h3 class="text-lg font-semibold mb-2">Câu {item.id}</h3>
                 </div>
@@ -665,7 +707,7 @@
                   </div>
                 </div>
 
-                <!-- Thông tin trùng lặp -->
+                <!-- Giữ lại thông tin loại trùng lặp nhưng loại bỏ nhãn "Câu trùng" -->
                 <div class="mt-4 pt-3 border-t border-gray-200">
                   {#if item.similarity_type === "question"}
                     <p
