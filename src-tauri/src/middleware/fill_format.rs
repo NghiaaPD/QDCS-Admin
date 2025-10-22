@@ -97,12 +97,26 @@ pub fn read_docx_content(file_path: &str) -> Result<Vec<Question>, Box<dyn std::
             for row in table.rows.iter() {
                 let first_cell = extract_cell_text(&row.cells[0]).trim().to_string();
                 
-                if first_cell.len() == 2 && first_cell.ends_with('.') {
+                // Debug: in ra first_cell để xem
+                if first_cell.len() >= 2 && first_cell.contains('.') {
+                    println!("DEBUG: first_cell = '{}'", first_cell);
+                }
+                
+                // Kiểm tra nếu là option (a., b., c., d.) hoặc dạng (a. a, b. b, ...)
+                if first_cell.len() >= 2 && first_cell.contains('.') {
+                    // Lấy ký tự đầu tiên làm key
                     let option_key = first_cell.chars().next().unwrap().to_uppercase().to_string();
+                    
                     if let Some(cell) = row.cells.get(1) {
                         let answer_text = extract_cell_text(cell).trim().to_string();
+                        println!("DEBUG: option_key = '{}', answer_text = '{}'", option_key, answer_text);
+                        
                         answer_texts.insert(option_key.clone(), answer_text.clone());
-                        question.answers.push(format!("{} {}", first_cell, answer_text));
+                        
+                        // Chỉ lưu định dạng "a. Central Processing Unit" (không lặp lại)
+                        let formatted_answer = format!("{}. {}", option_key.to_lowercase(), answer_text);
+                        println!("DEBUG: formatted_answer = '{}'", formatted_answer);
+                        question.answers.push(formatted_answer);
                     }
                 }
                 

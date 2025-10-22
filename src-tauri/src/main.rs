@@ -14,6 +14,8 @@ use crate::functions::plot_similarity::calculate_similarity_score;
 use crate::middleware::check_duplicate_answers::{check_duplicate_answers, check_duplicates_within_question};
 use crate::functions::load_accurancy::load_similarity_threshold;
 use docx_rust::DocxFile;
+use docx_rust::document::{BodyContent, Paragraph, ParagraphContent, Run, RunContent, Text };
+use crate::middleware::fill_format::extract_cell_text;
 
 #[tauri::command]
 async fn read_docx(file_data: Vec<u8>) -> Result<String, String> {
@@ -300,7 +302,7 @@ fn fill_format_check(file_data: Vec<u8>) -> Result<String, String> {
                 }
 
                 let letter = char::from(b'a' + (i as u8 % 26));
-                let _letter_prefix = format!("{}. ", letter);
+                let _letter_prefix = format!("{}.", letter);
                 
                 if trimmed == letter.to_string() || 
                    trimmed == format!("{}.", letter) ||
@@ -361,153 +363,45 @@ fn get_temp_file_path() -> String {
 }
 
 #[tauri::command]
-async fn filter_docx(file_path: String, duplicate_ids: Vec<String>, original_filename: Option<String>) -> Result<String, String> {
-    // Lấy thư mục hiện tại của ứng dụng
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Không thể xác định thư mục hiện tại: {}", e))?;
-
-    println!("File path: {}", file_path);
-    println!("Original filename: {:?}", original_filename);
-    println!("IDs cần giữ lại: {:?}", duplicate_ids);
-
-    // Kiểm tra xem có câu nào được giữ lại không
-    if duplicate_ids.is_empty() {
-        println!("Không có câu hỏi nào được giữ lại!");
-        return Err("Không có câu hỏi nào được giữ lại sau khi lọc. Không thể tạo file mới.".to_string());
-    }
-
-    // Sử dụng tên file gốc nếu được cung cấp
-    let output_file_stem = if let Some(original_name) = original_filename {
-        let original_path = std::path::Path::new(&original_name);
-        original_path.file_stem().unwrap_or_default().to_string_lossy().to_string()
-    } else {
-        let path = std::path::Path::new(&file_path);
-        path.file_stem().unwrap_or_default().to_string_lossy().to_string()
-    };
-
-    // Lấy phần mở rộng
-    let path = std::path::Path::new(&file_path);
-    let extension = path.extension().unwrap_or_default().to_string_lossy();
-
-    // Tạo đường dẫn file mới với timestamp
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let new_file_name = format!("{}_filtered_{}.{}", output_file_stem, timestamp, extension);
-    let new_file_path = current_dir.join(&new_file_name);
-    let new_file_path_str = new_file_path.to_str().unwrap().to_string();
-
-    // Đảm bảo file nguồn tồn tại
-    if !std::path::Path::new(&file_path).exists() {
-        return Err(format!("File gốc không tồn tại: {}", file_path));
-    }
-
-    // Đọc và xử lý file DOCX
-    use docx_rust::DocxFile;
-    use docx_rust::document::{BodyContent};
-    use std::fs::File;
-    use std::io::Write;
-
-    // Phương pháp 1: Đọc và viết lại với thư viện docx-rust
-    let _success = false;
-    
-    // Xử lý các định dạng màu (loại bỏ oklch)
-    let mut xml_content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Không thể đọc file DOCX như là văn bản: {}", e))?;
-    
-    // Thay thế các định dạng màu oklch bằng màu đen mặc định
-    xml_content = xml_content.replace("oklch(", "rgb(0,0,0");
-    
-    // Ghi nội dung đã sửa vào file tạm
-    let temp_file_path = format!("{}_temp_{}.{}", output_file_stem, timestamp, extension);
-    let mut temp_file = File::create(&temp_file_path)
-        .map_err(|e| format!("Không thể tạo file tạm: {}", e))?;
-    temp_file.write_all(xml_content.as_bytes())
-        .map_err(|e| format!("Không thể ghi vào file tạm: {}", e))?;
-    
-    // Sử dụng file đã được sửa màu sắc để tiếp tục xử lý
-    let doc_file = DocxFile::from_file(&temp_file_path)
+async fn filter_docx(file_path: String, duplicate_ids: Vec<String>, _original_filename: Option<String>) -> Result<String, String> {
+    let doc_file = DocxFile::from_file(&file_path)
         .map_err(|e| format!("Lỗi khi mở file DOCX: {}", e))?;
-    
-    let mut docx = doc_file.parse()
+    let docx = doc_file.parse()
         .map_err(|e| format!("Lỗi khi phân tích DOCX: {}", e))?;
-    
-    // Lọc các bảng (table) trong DOCX dựa trên IDs
-    let mut filtered_body_content = Vec::new();
-    
+
+    let mut kept_ids = Vec::new();
+
     for content in &docx.document.body.content {
         if let BodyContent::Table(table) = content {
-            // Kiểm tra xem table có phải là câu hỏi không
             if let Some(first_row) = table.rows.first() {
-                if first_row.cells.len() >= 2 {
-                    // Thử lấy ID từ ô đầu tiên
-                    if let Some(cell) = first_row.cells.first() {
-                        use docx_rust::document::{TableRowContent, TableCellContent, ParagraphContent, RunContent};
-                        
-                        // Extract ID
-                        let mut id = String::new();
-                        if let TableRowContent::TableCell(cell_data) = cell {
-                            for content in &cell_data.content {
-                                if let TableCellContent::Paragraph(p) = content {
-                                    for run in &p.content {
-                                        if let ParagraphContent::Run(r) = run {
-                                            for text in &r.content {
-                                                if let RunContent::Text(t) = text {
-                                                    id = t.text.trim().to_string();
-                                                    // Nếu ID có định dạng "QN=123", lấy phần sau "QN="
-                                                    if let Some(id_part) = id.strip_prefix("QN=") {
-                                                        id = id_part.trim().to_string();
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Nếu ID nằm trong danh sách các ID cần giữ lại, thì giữ lại table này
+                if let Some(cell) = first_row.cells.first() {
+                    let cell_text = extract_cell_text(cell).trim().to_string();
+                    if let Some(id) = cell_text.strip_prefix("QN=") {
+                        let id = id.trim().to_string();
                         if duplicate_ids.contains(&id) {
-                            filtered_body_content.push(BodyContent::Table(table.clone()));
+                            kept_ids.push(id.clone());
+                            println!("Giữ lại bảng với QN={}", id);
+                        } else {
+                            println!("Loại bỏ bảng với QN={}", id);
                         }
+                    } else {
+                        println!("Bảng không có QN=, bỏ qua");
                     }
                 }
             }
-        } else {
-            // Giữ lại các nội dung không phải là table
-            filtered_body_content.push(content.clone());
         }
     }
-    
-    // Cập nhật nội dung body trong DOCX
-    docx.document.body.content = filtered_body_content;
-    
-    // Ghi ra file mới
-    match docx.write_file(&new_file_path_str) {
-        Ok(_) => {
-            let _ = ();
-            println!("Đã lọc và lưu file DOCX thành công (phương pháp 1)");
-        },
-        Err(e) => {
-            println!("Lỗi khi ghi file DOCX (phương pháp 1): {}", e);
-        }
-    }
-    
-    // Xóa file tạm
-    let _ = std::fs::remove_file(&temp_file_path);
-    
-    Ok(new_file_path_str)
+
+    println!("Các QN= id được giữ lại: {:?}", kept_ids);
+
+    Ok(format!("Các QN= id được giữ lại: {:?}", kept_ids))
 }
 
 #[tauri::command]
 async fn filter_docx_with_data(file_data: Vec<u8>, duplicate_ids: Vec<String>, original_filename: Option<String>) -> Result<String, String> {
     use docx_rust::document::{BodyContent};
 
-    // Lấy thư mục hiện tại của ứng dụng
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Không thể xác định thư mục hiện tại: {}", e))?;
+    // println!("Danh sách duplicate_ids FE gửi lên: {:?}", duplicate_ids);
 
     // Kiểm tra xem có câu nào được giữ lại không
     if duplicate_ids.is_empty() {
@@ -529,6 +423,7 @@ async fn filter_docx_with_data(file_data: Vec<u8>, duplicate_ids: Vec<String>, o
         .unwrap_or_default()
         .as_secs();
     let new_file_name = format!("{}_filtered_{}.docx", output_file_stem, timestamp);
+    let current_dir = std::env::current_dir().unwrap();
     let new_file_path = current_dir.join(&new_file_name);
     let new_file_path_str = new_file_path.to_str().unwrap().to_string();
 
@@ -538,111 +433,173 @@ async fn filter_docx_with_data(file_data: Vec<u8>, duplicate_ids: Vec<String>, o
     
     // Ghi dữ liệu vào file tạm
     match std::fs::write(&temp_file_path, &file_data) {
-        Ok(_) => println!("Đã ghi file tạm thành công: {}", temp_file_path_str),
+        Ok(_) => {}, // println!("Đã ghi file tạm thành công: {}", temp_file_path_str),
         Err(e) => return Err(format!("Không thể ghi file tạm: {}", e))
     }
 
-    // PHƯƠNG PHÁP ĐƠN GIẢN: Triển khai trực tiếp docx-rust tại đây
-    let _success = false;
+    // Đọc và parse file DOCX
+    let doc_file = match DocxFile::from_file(&temp_file_path_str) {
+        Ok(file) => file,
+        Err(e) => {
+            // Thử sao chép file về đích khi có lỗi
+            if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path_str) {
+                let _ = true;
+            }
+            return Err(format!("Không thể đọc file DOCX: {}", e))
+        }
+    };
     
-    // Thử phương pháp với docx-rust
-    {
-        use docx_rust::document::{TableRowContent, TableCellContent, ParagraphContent, RunContent};
-        
-        let doc_file = match DocxFile::from_file(&temp_file_path_str) {
-            Ok(file) => file,
-            Err(e) => {
-                // Thử sao chép file về đích khi có lỗi
-                if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path) {
-                    let _ = true;
-                }
-                return Err(format!("Không thể đọc file DOCX: {}", e))
+    let mut docx = match doc_file.parse() {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            // Thử sao chép file về đích khi có lỗi
+            if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path_str) {
+                let _ = true;
             }
-        };
-        
-        let mut docx = match doc_file.parse() {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                // Thử sao chép file về đích khi có lỗi
-                if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path) {
-                    let _ = true;
-                }
-                return Err(format!("Lỗi khi phân tích DOCX: {}", e))
-            }
-        };
-        
-        // Lọc các bảng (table) trong DOCX dựa trên IDs
-        let mut filtered_body_content = Vec::new();
-        
-        for content in &docx.document.body.content {
-            if let BodyContent::Table(table) = content {
-                let mut keep_table = false;
-                
-                // Duyệt qua các hàng và ô để tìm ID
-                for row in &table.rows {
-                    for cell_content in &row.cells {
-                        if let TableRowContent::TableCell(cell) = cell_content {
-                            for cell_item in &cell.content {
-                                if let TableCellContent::Paragraph(para) = cell_item {
-                                    // Lấy tất cả text từ paragraph
-                                    let mut id_text = String::new();
-                                    for para_content in &para.content {
-                                        if let ParagraphContent::Run(run) = para_content {
-                                            for run_content in &run.content {
-                                                if let RunContent::Text(text_content) = run_content {
-                                                    id_text.push_str(&text_content.text);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    
-                                    // Trim ID và xử lý QN= prefix
-                                    let trimmed_id = id_text.trim();
-                                    let id = if let Some(id_part) = trimmed_id.strip_prefix("QN=") {
-                                        id_part.trim()
-                                    } else {
-                                        trimmed_id
-                                    };
-                                    
-                                    if duplicate_ids.contains(&id.to_string()) {
-                                        keep_table = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if keep_table {
-                                break;
-                            }
-                        }
-                    }
-                    if keep_table {
-                        break;
+            return Err(format!("Lỗi khi phân tích DOCX: {}", e))
+        }
+    };
+
+    let mut filtered_body_content: Vec<BodyContent> = Vec::new();
+    let mut kept_count = 0;
+    let mut removed_count = 0;
+    let mut kept_ids = Vec::new();
+    let mut removed_ids = Vec::new();
+
+    // Log thông tin debug
+    // println!("Tổng số phần tử trong body: {}", docx.document.body.content.len());
+
+    // Lọc các bảng (table) trong DOCX dựa trên IDs
+    for content in &docx.document.body.content {
+        if let BodyContent::Table(table) = content {
+            let mut found_id = None;
+            
+            // Chỉ kiểm tra cell đầu tiên của hàng đầu tiên (như fill_format.rs)
+            if let Some(first_row) = table.rows.first() {
+                if let Some(cell) = first_row.cells.first() {
+                    let cell_text = extract_cell_text(cell).trim().to_string();
+                    // println!("Cell đầu tiên của bảng: '{}'", cell_text);
+                    if let Some(id) = cell_text.strip_prefix("QN=") {
+                        found_id = Some(id.trim().to_string());
+                        // println!("==> ĐÃ TÌM THẤY QN= ID: '{}'", id.trim());
                     }
                 }
-                
-                if keep_table {
+            }
+            
+            if let Some(id) = found_id {
+                if duplicate_ids.contains(&id) {
                     filtered_body_content.push(BodyContent::Table(table.clone()));
+                    kept_count += 1;
+                    kept_ids.push(id.clone());
+                    // println!("Giữ lại bảng với QN={}", id);
+                } else {
+                    removed_count += 1;
+                    removed_ids.push(id.clone());
+                    // println!("Đã loại bỏ table với QN={}", id);
                 }
             } else {
-                // Giữ lại các nội dung không phải là table
-                filtered_body_content.push(content.clone());
+                removed_count += 1;
+                // println!("Đã loại bỏ table không có QN=");
             }
+        } else {
+            // Giữ lại các nội dung không phải là table
+            filtered_body_content.push(content.clone());
         }
-        
-        // Cập nhật nội dung body trong DOCX
-        docx.document.body.content = filtered_body_content;
-        
-        // Ghi ra file mới
-        match docx.write_file(&new_file_path_str) {
-            Ok(_) => {
-                let _ = ();
-            },
-            Err(e) => {
-                // Thử sao chép file về đích khi có lỗi
-                if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path) {
-                    let _ = ();
-                }
+    }
+    
+    println!("Tổng kết: Giữ lại {} bảng, loại bỏ {} bảng", kept_count, removed_count);
+
+    // Tạo các paragraph thông báo để thêm vào đầu document
+    let mut notification_content: Vec<BodyContent> = Vec::new();
+
+    // Tạo thông báo số lượng câu trùng
+    let kept_text = if kept_count > 0 {
+        format!("Số lượng câu không trùng (được giữ lại): {} câu - ID: {}", 
+                kept_count, 
+                kept_ids.join(", "))
+    } else {
+        "Số lượng câu không trùng (được giữ lại): 0 câu".to_string()
+    };
+
+    let removed_text = if removed_count > 0 {
+        format!("Số lượng câu trùng (đã loại bỏ): {} câu - ID: {}", 
+                removed_count, 
+                removed_ids.join(", "))
+    } else {
+        "Số lượng câu trùng (đã loại bỏ): 0 câu".to_string()
+    };
+
+    // Tạo paragraph cho thông báo câu không trùng
+    let kept_paragraph = Paragraph {
+        content: vec![
+            ParagraphContent::Run(Run {
+                content: vec![
+                    RunContent::Text(Text {
+                        text: kept_text.into(),
+                        space: None,
+                    })
+                ],
+                ..Default::default()
+            })
+        ],
+        ..Default::default()
+    };
+
+    // Tạo paragraph cho thông báo câu trùng
+    let removed_paragraph = Paragraph {
+        content: vec![
+            ParagraphContent::Run(Run {
+                content: vec![
+                    RunContent::Text(Text {
+                        text: removed_text.into(),
+                        space: None,
+                    })
+                ],
+                ..Default::default()
+            })
+        ],
+        ..Default::default()
+    };
+
+    // Tạo paragraph trống để ngăn cách
+    let empty_paragraph = Paragraph {
+        content: vec![
+            ParagraphContent::Run(Run {
+                content: vec![
+                    RunContent::Text(Text {
+                        text: "".into(),
+                        space: None,
+                    })
+                ],
+                ..Default::default()
+            })
+        ],
+        ..Default::default()
+    };
+
+    // Thêm các paragraph thông báo vào đầu document
+    notification_content.push(BodyContent::Paragraph(kept_paragraph));
+    notification_content.push(BodyContent::Paragraph(removed_paragraph));
+    notification_content.push(BodyContent::Paragraph(empty_paragraph));
+
+    // Kết hợp notification với filtered content
+    notification_content.extend(filtered_body_content);
+
+    // Cập nhật nội dung body trong DOCX
+    docx.document.body.content = notification_content;
+    
+    // Ghi ra file mới
+    match docx.write_file(&new_file_path_str) {
+        Ok(_) => {
+            println!("Đã xuất file thành công: {}", new_file_path_str);
+        },
+        Err(e) => {
+            println!("Lỗi khi ghi file DOCX: {}", e);
+            // Thử sao chép file gốc về đích khi có lỗi
+            if let Ok(_) = std::fs::copy(&temp_file_path, &new_file_path_str) {
+                println!("Đã sao chép file gốc thay thế");
             }
+            return Err(format!("Lỗi khi ghi file DOCX: {}", e));
         }
     }
     
@@ -650,6 +607,21 @@ async fn filter_docx_with_data(file_data: Vec<u8>, duplicate_ids: Vec<String>, o
     let _ = std::fs::remove_file(&temp_file_path);
     
     Ok(new_file_path_str)
+}
+
+#[tauri::command]
+fn backup_duckdb() -> Result<String, String> {
+    let db_path = "data.duckdb";
+    let backup_path = "new_data.duckdb";
+
+    // Thực hiện checkpoint để flush dữ liệu
+    if let Ok(conn) = duckdb::Connection::open(db_path) {
+        let _ = conn.execute("PRAGMA checkpoint;", []);
+    }
+
+    std::fs::copy(db_path, backup_path)
+        .map_err(|e| format!("Không thể sao lưu database: {}", e))?;
+    Ok(backup_path.to_string())
 }
 
 #[cfg(not(feature = "test_fill_format"))]
@@ -661,7 +633,9 @@ fn main() {
             fill_format_check, 
             filter_docx,
             filter_docx_with_data,
-            get_temp_file_path
+            get_temp_file_path,
+            backup_duckdb,
+            insert_filtered_to_new_db  // <-- Thêm dòng này
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -737,4 +711,143 @@ fn main() {
             process::exit(1);
         }
     }
+}
+
+#[tauri::command]
+async fn insert_filtered_to_new_db() -> Result<String, String> {
+    // 1. Tìm file filtered mới nhất
+    let filtered_file_path = match find_latest_filtered_file() {
+        Ok(path) => path,
+        Err(e) => return Err(format!("Không tìm thấy file filtered: {}", e))
+    };
+    
+    println!("Tìm thấy file filtered mới nhất: {}", filtered_file_path);
+    
+    // 2. Tạo bản sao database
+    match create_new_database_copy() {
+        Ok(_) => println!("Đã tạo bản sao new_data.duckdb thành công"),
+        Err(e) => return Err(format!("Không thể tạo bản sao database: {}", e))
+    };
+    
+    // 3. Đọc và insert dữ liệu từ file filtered vào new_data.duckdb
+    match insert_filtered_data_to_new_db(&filtered_file_path).await {
+        Ok(message) => {
+            println!("{}", message);
+            Ok(format!("Đã insert dữ liệu từ {} vào new_data.duckdb thành công", filtered_file_path))
+        },
+        Err(e) => Err(format!("Lỗi khi insert dữ liệu: {}", e))
+    }
+}
+
+// Helper function: Tìm file filtered mới nhất
+fn find_latest_filtered_file() -> Result<String, String> {
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Không thể lấy thư mục hiện tại: {}", e))?;
+    
+    let mut filtered_files = Vec::new();
+    
+    // Đọc tất cả file trong thư mục hiện tại
+    let entries = std::fs::read_dir(&current_dir)
+        .map_err(|e| format!("Không thể đọc thư mục: {}", e))?;
+    
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            
+            // Tìm file có pattern *_filtered_*.docx
+            if file_name.contains("_filtered_") && file_name.ends_with(".docx") {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        filtered_files.push((file_name, modified));
+                    }
+                }
+            }
+        }
+    }
+    
+    if filtered_files.is_empty() {
+        return Err("Không tìm thấy file filtered nào".to_string());
+    }
+    
+    // Sắp xếp theo thời gian modified (mới nhất trước)
+    filtered_files.sort_by(|a, b| b.1.cmp(&a.1));
+    
+    let latest_file = &filtered_files[0].0;
+    let full_path = current_dir.join(latest_file);
+    
+    Ok(full_path.to_string_lossy().to_string())
+}
+
+// Helper function: Tạo bản sao database
+fn create_new_database_copy() -> Result<(), String> {
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Không thể lấy thư mục hiện tại: {}", e))?;
+    
+    let source_path = current_dir.join("data.duckdb");
+    let backup_path = current_dir.join("new_data.duckdb");
+    
+    // Kiểm tra xem file data.duckdb có tồn tại không
+    if !source_path.exists() {
+        return Err("File data.duckdb không tồn tại".to_string());
+    }
+    
+    // Copy file data.duckdb thành new_data.duckdb
+    std::fs::copy(&source_path, &backup_path)
+        .map_err(|e| format!("Không thể copy database: {}", e))?;
+    
+    Ok(())
+}
+
+// Helper function: Insert dữ liệu từ file filtered vào new_data.duckdb
+async fn insert_filtered_data_to_new_db(file_path: &str) -> Result<String, String> {
+    // Đọc file DOCX filtered
+    let file_data = std::fs::read(file_path)
+        .map_err(|e| format!("Không thể đọc file filtered: {}", e))?;
+    
+    // Parse DOCX và lấy dữ liệu câu hỏi
+    match read_docx_content_from_bytes(&file_data) {
+        Ok(questions) => {
+            let mut success_count = 0;
+            let mut error_count = 0;
+            
+            for (i, q) in questions.iter().enumerate() {
+                match insert_embeddings_to_new_database(q.question_embedding.clone(), q.answer_embedding.clone()) {
+                    Ok(_) => {
+                        success_count += 1;
+                        println!("Đã insert câu hỏi {} thành công", i + 1);
+                    },
+                    Err(e) => {
+                        error_count += 1;
+                        println!("Lỗi khi insert câu hỏi {}: {}", i + 1, e);
+                    }
+                }
+            }
+            
+            Ok(format!(
+                "Đã insert {} câu hỏi thành công, {} lỗi vào new_data.duckdb", 
+                success_count, 
+                error_count
+            ))
+        },
+        Err(e) => Err(format!("Lỗi khi đọc nội dung file filtered: {}", e))
+    }
+}
+
+// Helper function: Insert embeddings vào new_data.duckdb (theo format insertdb.rs)
+fn insert_embeddings_to_new_database(question_embedding: Vec<f32>, answer_embedding: Vec<f32>) -> Result<(), String> {
+    use duckdb::Connection;
+    
+    let conn = Connection::open("new_data.duckdb")
+        .map_err(|e| format!("Không thể mở new_data.duckdb: {}", e))?;
+    
+    // Sử dụng format tương tự insertdb.rs
+    let query = format!(
+        "INSERT INTO data (question_embedding, answer_embedding) VALUES (array{:?}::REAL[], array{:?}::REAL[])",
+        question_embedding, answer_embedding
+    );
+    
+    conn.execute(&query, [])
+        .map_err(|e| format!("Không thể insert vào new_data.duckdb: {}", e))?;
+    
+    Ok(())
 }

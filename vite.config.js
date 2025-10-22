@@ -7,5 +7,8 @@ export default defineConfig({
   plugins: [svelte(), tailwindcss()],
   server: {
     port: 8100,
+    watch: {
+      ignored: ['**/new_data.duckdb']
+    },
   },
 })

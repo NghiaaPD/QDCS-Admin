@@ -20,6 +20,9 @@
   let fileData = null;
   let exportLoading = false;
 
+  // Thêm biến mới
+  let insertingToNewDb = false;
+
   function showNotification(message, type = "error") {
     notification = { message, type };
     setTimeout(() => {
@@ -165,9 +168,7 @@
       // Lưu file tạm (nhưng chúng ta sẽ gửi lại fileData khi xuất)
       tempFilePath = await invoke("get_temp_file_path");
 
-      const result = await invoke("fill_format_check", {
-        fileData: fileData,
-      });
+      const result = await invoke("fill_format_check", { fileData: fileData });
 
       const parsed = JSON.parse(result);
       similarities = parsed.similarities;
@@ -223,26 +224,64 @@
   function parseOptions(item) {
     if (!item.answers || !Array.isArray(item.answers)) return [];
 
+    console.log("Frontend DEBUG: Raw answers from backend:", item.answers);
+    console.log(
+      "Frontend DEBUG: Correct answer keys:",
+      item.correct_answer_keys,
+    );
+    console.log("Frontend DEBUG: Full item:", item);
+
     return item.answers
       .map((ans) => {
+        console.log("Frontend DEBUG: Processing answer:", ans);
+
         // Phân tích đáp án
         let parts = ans.split(". ");
         let letter = parts[0];
         let text = parts.slice(1).join(". "); // Phòng trường hợp nội dung có dấu chấm
 
+        // Xử lý trường hợp text bắt đầu bằng letter lặp lại (như "b. advsfvsf" từ "b. b. advsfvsf")
+        if (text.startsWith(letter + ". ")) {
+          text = text.substring(letter.length + 2); // Loại bỏ "b. " khỏi đầu text
+        }
+
+        console.log(
+          "Frontend DEBUG: Split result - letter:",
+          letter,
+          "text:",
+          text,
+        );
+
         // Kiểm tra đáp án có hợp lệ không
         const isEmpty = !text || text.trim() === "" || text === letter;
 
-        // Kiểm tra đáp án có phải đáp án đúng không
+        // Kiểm tra đáp án có phải đáp án đúng không - so sánh lowercase
+        // Backend trả về correct_answer_keys dưới dạng lowercase
         const isCorrect =
-          item.correct_answer_keys && item.correct_answer_keys.includes(letter);
+          item.correct_answer_keys &&
+          item.correct_answer_keys.includes(letter.toLowerCase());
 
-        return {
+        console.log(
+          "Frontend DEBUG: Checking isCorrect - letter:",
+          letter,
+          "lowercase:",
+          letter.toLowerCase(),
+          "correct_answer_keys:",
+          item.correct_answer_keys,
+          "isCorrect:",
+          isCorrect,
+        );
+
+        const result = {
           letter,
           text,
+          fullText: letter + ". " + text, // Tạo lại fullText đúng format
           isCorrect,
           isEmpty, // Thêm trường mới để dễ lọc
         };
+
+        console.log("Frontend DEBUG: Final result:", result);
+        return result;
       })
       .filter((option) => !option.isEmpty); // Lọc bỏ các đáp án trống ngay tại đây
   }
@@ -265,26 +304,53 @@
       return;
     }
 
+    // THÊM ĐIỀU KIỆN NÀY - Chỉ kiểm tra fileData khi function này được gọi trực tiếp
+    // Không kiểm tra khi đang trong quá trình reload sau insert
     if (!fileData) {
-      showNotification("Không tìm thấy dữ liệu file. Vui lòng tải lại file.");
+      // Chỉ hiển thị lỗi nếu thực sự không có dữ liệu, không phải do reload
+      if (!insertingToNewDb) {
+        showNotification("Không tìm thấy dữ liệu file. Vui lòng tải lại file.");
+      }
       return;
     }
 
     exportLoading = true;
     try {
-      console.log("Đang gửi IDs để giữ lại:", selectedQuestionsToKeep);
-      // Gửi cả fileData thay vì chỉ đường dẫn file
-      const result = await invoke("filter_docx_with_data", {
+      const filteredDocxPath = await invoke("filter_docx_with_data", {
         fileData: fileData,
         duplicateIds: selectedQuestionsToKeep,
         originalFilename: originalFileName,
       });
 
-      showNotification(`Đã lọc và xuất file: ${result}`, "success");
+      showNotification(`Đã lọc và xuất file DOCX thành công!`, "success");
     } catch (error) {
       showNotification(`Lỗi khi lọc file: ${error}`);
     } finally {
       exportLoading = false;
+    }
+  }
+
+  // Thêm function mới
+  async function insertFilteredToNewDb() {
+    if (insertingToNewDb) return;
+
+    insertingToNewDb = true;
+
+    try {
+      showNotification(
+        "Đang tìm file filtered mới nhất và tạo bản sao database...",
+        "info",
+      );
+
+      const result = await invoke("insert_filtered_to_new_db");
+
+      showNotification(result, "success");
+      console.log("Insert filtered to new DB result:", result);
+    } catch (error) {
+      console.error("Lỗi insert filtered to new DB:", error);
+      showNotification(`Lỗi: ${error}`, "error");
+    } finally {
+      insertingToNewDb = false;
     }
   }
 </script>
@@ -309,7 +375,9 @@
     <div
       class="{notification.type === 'success'
         ? 'bg-green-500'
-        : 'bg-red-500'} text-white px-4 py-2 rounded-lg shadow-lg flex items-center"
+        : notification.type === 'info'
+          ? 'bg-blue-500'
+          : 'bg-red-500'} text-white px-4 py-2 rounded-lg shadow-lg flex items-center"
     >
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -321,6 +389,12 @@
           <path
             fill-rule="evenodd"
             d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+            clip-rule="evenodd"
+          />
+        {:else if notification.type === "info"}
+          <path
+            fill-rule="evenodd"
+            d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
             clip-rule="evenodd"
           />
         {:else}
@@ -638,6 +712,7 @@
           <div class="flex justify-between items-center mb-6">
             <h2 class="text-2xl font-bold">Kết quả kiểm tra</h2>
             <div class="flex space-x-2">
+              <!-- Nút Lọc & Xuất DOCX -->
               <button
                 on:click={filterAndExportDocx}
                 class="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 focus:outline-none {exportLoading
@@ -651,6 +726,24 @@
                   ></span>
                 {/if}
                 Lọc & Xuất DOCX
+              </button>
+
+              <!-- Nút Insert File Filtered Vào New DB - DI CHUYỂN VÀO ĐÂY -->
+              <button
+                class="px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 focus:outline-none {insertingToNewDb
+                  ? 'opacity-70 cursor-wait'
+                  : ''}"
+                on:click={insertFilteredToNewDb}
+                disabled={insertingToNewDb}
+              >
+                {#if insertingToNewDb}
+                  <span
+                    class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"
+                  ></span>
+                  Đang Insert...
+                {:else}
+                  📊 Insert Vào New DB
+                {/if}
               </button>
             </div>
           </div>
@@ -700,7 +793,7 @@
                             ? "text-gray-800 font-medium"
                             : "text-gray-700"}
                         >
-                          {option.letter}. {option.text}
+                          {option.fullText}
                         </p>
                       </div>
                     {/each}
@@ -747,3 +840,7 @@
     {/if}
   </div>
 </div>
+
+<style>
+  /* ...existing styles... */
+</style>
